@@ -1,0 +1,72 @@
+{
+  "name": "dsh-ui-picker",
+  "version": "0.1.4",
+  "description": "点选前端页面上的任意 UI 控件，自动把控件详情（标签/CSS 选择器/XPath/组件名/样式）写入 DeepSeek Harness 输入框，让 AI 精准定位要改的界面元素。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./picker.js": "./picker.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "picker.js",
+    "dsh-ui-picker.user.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "ui-picker",
+    "element-picker",
+    "element-inspector",
+    "frontend",
+    "css-selector",
+    "xpath",
+    "react",
+    "vue"
+  ],
+  "license": "MIT",
+  "author": "ztlovelsw",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ztlovelsw/dsh-ui-picker.git"
+  },
+  "homepage": "https://github.com/ztlovelsw/dsh-ui-picker#readme",
+  "bugs": {
+    "url": "https://github.com/ztlovelsw/dsh-ui-picker/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/bridge-test.mjs && node tests/client-test.mjs && node tests/client-dup-test.mjs",
+    "install:dsh": "node install.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "id": "dsh-ui-picker",
+    "name": "UI 拾取器",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

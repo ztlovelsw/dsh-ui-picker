@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><title>drag test</title>
+<style>body{font-family:sans-serif;padding:30px;background:#f8fafc;height:2000px}</style></head><body>
+<h1>drag</h1><pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+function pt(type, x, y) {
+  return new PointerEvent(type, {pointerId: 1, pointerType: 'mouse', isPrimary: true,
+    clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true});
+}
+setTimeout(() => {
+  const fab = document.getElementById('__dsh_picker_fab__');
+  const r = fab.getBoundingClientRect();
+  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+  const before = {left: r.left, top: r.top};
+  fab.dispatchEvent(pt('pointerdown', cx, cy));
+  for (let i = 1; i <= 6; i++) {
+    fab.dispatchEvent(pt('pointermove', cx - i*20, cy - i*15));
+  }
+  fab.dispatchEvent(pt('pointerup', cx - 120, cy - 90));
+  setTimeout(() => {
+    const r2 = fab.getBoundingClientRect();
+    const saved = localStorage.getItem('__dsh_picker_pos__');
+    const active = fab.classList.contains('is-active');
+    document.getElementById('out').textContent = 'DRAG ' + JSON.stringify({
+      before: {left: Math.round(before.left), top: Math.round(before.top)},
+      after: {left: Math.round(r2.left), top: Math.round(r2.top)},
+      inlineLeft: fab.style.left, inlineTop: fab.style.top,
+      saved, pickingStarted: active,
+      draggingClass: fab.className
+    });
+  }, 400);
+}, 500);
+</script></body></html>

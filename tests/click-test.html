@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>click test</title>
+<style>body{font-family:sans-serif;padding:40px}button{padding:12px 24px;font-size:15px}</style></head><body>
+<h1>Click flow</h1>
+<button id="target-btn" class="primary">提交订单</button>
+<pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+setTimeout(() => {
+  const btn = document.getElementById('target-btn');
+  const rect = btn.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  window.dshUiPicker.start();
+  // 模拟真实鼠标：先移动（触发高亮），再点击
+  btn.dispatchEvent(new MouseEvent('mousemove', {bubbles:true, clientX:x, clientY:y}));
+  setTimeout(() => {
+    btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, clientX:x, clientY:y}));
+    setTimeout(() => {
+      const overlay = document.getElementById('__dsh_picker_overlay__');
+      document.getElementById('out').textContent =
+        'CLICK_TEST_DONE overlay=' + (overlay ? overlay.style.display : 'missing') + ' api=' + (typeof window.dshUiPicker);
+    }, 600);
+  }, 120);
+}, 400);
+</script></body></html>

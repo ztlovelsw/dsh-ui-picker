@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 日志与临时产物
+*.log
+npm-debug.log*
+.tmp*/
+*.tmp
+
+# 本地截图 / 预览产物（preview-fab.png 要提交，其余忽略）
+.shot*.png
+.preview-*.png
+.fab-*.png
+.drag-*.png
+.batch-*.png
+
+# 测试时产生的本地文件
+tests/*.local.*

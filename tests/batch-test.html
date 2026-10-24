@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><title>batch</title>
+<style>body{font-family:sans-serif;padding:30px}button,input{font:inherit;padding:8px 12px;margin:6px;border-radius:8px;border:1px solid #cbd5e1}</style></head><body>
+<h2>batch test</h2>
+<button id="a">提交订单</button>
+<input id="b" placeholder="客户名称" />
+<select id="c"><option>官网</option></select>
+<pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+const log = [];
+function pt(t, el, opts={}) {
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width/2, y = r.top + r.height/2;
+  el.dispatchEvent(new MouseEvent(t, Object.assign({bubbles:true, cancelable:true, clientX:x, clientY:y}, opts)));
+}
+function key(k) { document.dispatchEvent(new KeyboardEvent('keydown', {key:k, bubbles:true, cancelable:true})); }
+setTimeout(() => {
+  const fab = document.getElementById('__dsh_picker_fab__');
+  fab.click();
+  setTimeout(() => {
+    // Shift 加选 A
+    const a = document.getElementById('a');
+    pt('mousemove', a, {shiftKey:true});
+    setTimeout(() => {
+      pt('click', a, {shiftKey:true});
+      setTimeout(() => {
+        const panel = document.getElementById('__dsh_picker_batch__');
+        log.push('panel1=' + (panel ? panel.className + '|' + panel.querySelector('.bp-count').textContent : 'missing'));
+        // 普通点击 B（已在批量模式）
+        const b = document.getElementById('b');
+        pt('mousemove', b);
+        setTimeout(() => {
+          pt('click', b);
+          setTimeout(() => {
+            const panel2 = document.getElementById('__dsh_picker_batch__');
+            log.push('panel2=' + (panel2 ? panel2.querySelector('.bp-count').textContent : 'missing'));
+            key('Enter');
+            setTimeout(() => {
+              log.push('afterEnter=' + (document.getElementById('__dsh_picker_batch__') || {}).className);
+              log.push('picking=' + document.body.style.cursor);
+              document.getElementById('out').textContent = 'BATCH ' + log.join(' | ');
+            }, 500);
+          }, 150);
+        }, 100);
+      }, 150);
+    }, 100);
+  }, 200);
+}, 600);
+</script></body></html>

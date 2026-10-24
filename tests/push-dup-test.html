@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>push dup</title></head><body><pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+setTimeout(async () => {
+  const before = await (await fetch('http://127.0.0.1:17857/health')).json();
+  const t1 = await window.dshUiPicker.push('DUP-TEST-SAME-TEXT');
+  const t2 = await window.dshUiPicker.push('DUP-TEST-SAME-TEXT');
+  setTimeout(async () => {
+    const after = await (await fetch('http://127.0.0.1:17857/health')).json();
+    document.getElementById('out').textContent = 'PUSHDUP ' + JSON.stringify({before: before.seq, after: after.seq, r1: t1, r2: t2});
+  }, 400);
+}, 500);
+</script></body></html>

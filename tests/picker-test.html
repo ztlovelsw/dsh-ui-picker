@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>DSH 拾取器自测页</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 40px; background: #f8fafc; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; max-width: 520px; }
+    .card h2 { margin: 0 0 6px; font-size: 18px; }
+    .card p { margin: 0 0 16px; color: #64748b; font-size: 13px; }
+    .row { display: flex; gap: 8px; }
+    button.primary {
+      background: #2563eb; color: #fff; border: none; border-radius: 8px;
+      padding: 10px 20px; font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    button.ghost { background: #fff; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 16px; }
+    input { flex: 1; border: 1px solid #cbd5e1; border-radius: 8px; padding: 9px 12px; font-size: 14px; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 10px; font-size: 12px; overflow: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="card" id="order-card">
+    <h2>订单确认</h2>
+    <p>请确认收货信息后提交</p>
+    <div class="row">
+      <input id="coupon" type="text" placeholder="输入优惠码" aria-label="优惠码" />
+      <button class="primary" id="submit-order" type="submit" data-testid="submit-order">
+        提交订单
+      </button>
+      <button class="ghost" id="cancel-order">取消</button>
+    </div>
+  </div>
+
+  <h3>formatForAI 输出</h3>
+  <pre id="out">(pending)</pre>
+
+  <script src="http://127.0.0.1:17857/picker.js" onerror="document.getElementById('out').textContent='PICKER_LOAD_FAILED'"></script>
+  <script>
+    setTimeout(() => {
+      try {
+        const el = document.querySelector('#submit-order');
+        const info = window.dshUiPicker.describe(el);
+        window.__INFO__ = info;
+        document.getElementById('out').textContent =
+          window.dshUiPicker.format(info) + '\n\n--- JSON ---\n' +
+          JSON.stringify({ selector: info.selector, xpath: info.xpath, role: info.role, classes: info.classes, box: info.box }, null, 2);
+        document.title = 'RESULT_OK';
+      } catch (error) {
+        document.getElementById('out').textContent = 'ERROR: ' + error.stack;
+        document.title = 'RESULT_ERROR';
+      }
+    }, 300);
+  </script>
+</body>
+</html>

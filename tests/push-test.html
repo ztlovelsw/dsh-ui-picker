@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>push test</title></head><body>
+<pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+setTimeout(async () => {
+  try {
+    const ok = await window.dshUiPicker.push('PUSH-FROM-PAGE-' + Date.now());
+    document.getElementById('out').textContent = 'PUSH_RESULT=' + ok;
+  } catch (e) { document.getElementById('out').textContent = 'PUSH_ERR=' + e.message; }
+}, 300);
+</script></body></html>

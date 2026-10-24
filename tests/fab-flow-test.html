@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>fab flow</title>
+<style>body{font-family:sans-serif;padding:30px;background:#f8fafc}button#target{padding:10px 18px}</style></head><body>
+<button id="target">提交订单</button>
+<pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+const log = [];
+setTimeout(() => {
+  const fab = document.getElementById('__dsh_picker_fab__');
+  log.push('fab=' + (fab ? fab.tagName + '.' + fab.className : 'missing'));
+  fab.click();
+  setTimeout(() => {
+    log.push('afterClick=' + fab.className);
+    const btn = document.getElementById('target');
+    const r = btn.getBoundingClientRect();
+    const x = r.left + r.width/2, y = r.top + r.height/2;
+    btn.dispatchEvent(new MouseEvent('mousemove', {bubbles:true, clientX:x, clientY:y}));
+    setTimeout(() => {
+      btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, clientX:x, clientY:y}));
+      setTimeout(() => {
+        log.push('afterPick=' + fab.className);
+        log.push('overlay=' + document.getElementById('__dsh_picker_overlay__').style.display);
+        document.getElementById('out').textContent = 'FLOW ' + log.join(' | ');
+      }, 400);
+    }, 120);
+  }, 120);
+}, 500);
+</script></body></html>

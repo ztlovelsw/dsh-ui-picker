@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"><title>restore</title></head><body>
+<pre id="out">pending</pre>
+<script>
+  localStorage.setItem('__dsh_picker_pos__', JSON.stringify({x: 300, y: 200}));
+</script>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+setTimeout(() => {
+  const fab = document.getElementById('__dsh_picker_fab__');
+  const r = fab.getBoundingClientRect();
+  document.getElementById('out').textContent = 'RESTORE ' + JSON.stringify({
+    left: Math.round(r.left), top: Math.round(r.top),
+    inlineLeft: fab.style.left, inlineTop: fab.style.top
+  });
+
+  // 再测一次越界夹取
+  localStorage.setItem('__dsh_picker_pos__', JSON.stringify({x: 999999, y: -500}));
+  fab.remove();
+  const s = document.createElement('script');
+  s.src = 'http://127.0.0.1:17857/picker.js?reload=1';
+  s.onload = () => setTimeout(() => {
+    const fab2 = document.getElementById('__dsh_picker_fab__');
+    const r2 = fab2.getBoundingClientRect();
+    document.getElementById('out').textContent += ' | CLAMP ' + JSON.stringify({
+      left: Math.round(r2.left), top: Math.round(r2.top),
+      vw: innerWidth, vh: innerHeight
+    });
+  }, 200);
+  document.body.appendChild(s);
+}, 600);
+</script></body></html>

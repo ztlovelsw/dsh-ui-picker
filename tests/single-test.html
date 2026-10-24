@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>single</title>
+<style>body{font-family:sans-serif;padding:30px}button{padding:10px 20px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:15px;font-weight:600}</style></head><body>
+<button id="submit-order" class="btn primary" type="submit">提交订单</button>
+<pre id="out">pending</pre>
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+setTimeout(() => {
+  document.getElementById('__dsh_picker_fab__').click();
+  setTimeout(() => {
+    const b = document.getElementById('submit-order');
+    const r = b.getBoundingClientRect();
+    const x = r.left + r.width/2, y = r.top + r.height/2;
+    b.dispatchEvent(new MouseEvent('mousemove', {bubbles:true, clientX:x, clientY:y}));
+    setTimeout(() => {
+      b.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, clientX:x, clientY:y}));
+      setTimeout(() => { document.getElementById('out').textContent = 'SINGLE_DONE'; }, 400);
+    }, 120);
+  }, 200);
+}, 600);
+</script></body></html>

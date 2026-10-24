@@ -1,0 +1,6 @@
+- insert:
+    - id: dsh-ui-picker
+      name: dsh-ui-picker
+      config:
+        enabled: true
+        port: 17857
