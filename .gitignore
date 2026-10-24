@@ -24,3 +24,6 @@ npm-debug.log*
 
 # 测试时产生的本地文件
 tests/*.local.*
+
+# npm pack 产物
+*.tgz

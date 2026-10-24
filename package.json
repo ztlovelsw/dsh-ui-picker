@@ -18,7 +18,8 @@
     "dsh-ui-picker.user.js",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "README.en.md"
   ],
   "keywords": [
     "deepseek-harness",
@@ -31,7 +32,15 @@
     "css-selector",
     "xpath",
     "react",
-    "vue"
+    "vue",
+    "llm",
+    "ai",
+    "deepseek",
+    "devtools",
+    "dom-inspector",
+    "ui-inspector",
+    "code-agent",
+    "web-development"
   ],
   "license": "MIT",
   "author": "ztlovelsw",
@@ -68,5 +77,8 @@
       "platform": "web",
       "immediately": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
