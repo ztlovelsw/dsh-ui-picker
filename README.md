@@ -1,5 +1,7 @@
 # dsh-ui-picker
 
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/ztlovelsw/dsh-ui-picker)
+
 **点一下页面上的控件，AI 就知道你要改哪里。**
 
 **中文** · [English](README.en.md)
