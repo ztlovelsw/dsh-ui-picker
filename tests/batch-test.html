@@ -7,6 +7,8 @@
 <pre id="out">pending</pre>
 <script src="http://127.0.0.1:17857/picker.js"></script>
 <script>
+// 用例只验 UI 流程：把推送打进桩里，别把样例文本塞进真实 DSH 输入框
+window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, seq: 1 }) });
 const log = [];
 function pt(t, el, opts={}) {
   const r = el.getBoundingClientRect();
@@ -17,6 +19,12 @@ function key(k) { document.dispatchEvent(new KeyboardEvent('keydown', {key:k, bu
 setTimeout(() => {
   const fab = document.getElementById('__dsh_picker_fab__');
   fab.click();
+  setTimeout(() => {
+    // 模式菜单里选「选取控件」
+    const pickItem = document.querySelector('#__dsh_picker_menu__ [data-mode="pick"]');
+    log.push('menu=' + (pickItem ? 'ok' : 'missing'));
+    if (pickItem) pickItem.click();
+  }, 60);
   setTimeout(() => {
     // Shift 加选 A
     const a = document.getElementById('a');

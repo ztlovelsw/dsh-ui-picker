@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>批注模式用例</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 34px 40px 120px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #152033; background: #f7f5ef;
+  }
+  h1#hero-title { font-size: 30px; margin: 6px 0 20px; letter-spacing: .02em; }
+  .hero {
+    position: relative; height: 330px; border-radius: 14px; overflow: hidden;
+    background: linear-gradient(180deg, #dfe9d8 0%, #cfe0d4 52%, #e6dcc3 100%);
+    border: 1px solid #d7d3c4;
+  }
+  .hero .sun { position: absolute; right: 78px; top: 44px; width: 130px; height: 130px; border-radius: 50%; background: #e98a5f; opacity: .85; }
+  .hero .hill { position: absolute; left: 0; bottom: 0; width: 100%; height: 120px; background: #b7c9a8; }
+  .hero .note { position: absolute; left: 18px; top: 16px; font-size: 12px; color: #4a5a48; letter-spacing: .18em; }
+  .row { display: flex; gap: 10px; margin-top: 18px; }
+  button.demo { padding: 10px 18px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; cursor: pointer; font: inherit; }
+  button#primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  pre#out {
+    position: fixed; right: 12px; top: 12px; width: 330px; max-height: 46vh; overflow: auto;
+    margin: 0; padding: 10px 12px; border-radius: 10px; background: rgba(15, 23, 42, .93);
+    color: #e2e8f0; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; z-index: 2147483640;
+  }
+  pre#out b { color: #7dd3fc; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1 id="hero-title">批注模式用例</h1>
+  <div class="hero" id="hero">
+    <span class="note">COASTAL SERIES · 01</span>
+    <div class="sun"></div>
+    <div class="hill"></div>
+  </div>
+  <div class="row">
+    <button class="demo" id="secondary">次要按钮</button>
+    <button class="demo" id="primary">主要按钮</button>
+  </div>
+<pre id="out">running…</pre>
+
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  const lines = [];
+  let failed = 0;
+  const ok = (cond, msg, extra) => {
+    lines.push((cond ? 'PASS ' : 'FAIL ') + msg + (extra === undefined ? '' : '  -> ' + extra));
+    if (!cond) failed += 1;
+  };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const flush = () => {
+    out.innerHTML = lines.map((l) => '<b>' + l.slice(0, 4) + '</b>' + l.slice(4)).join('\n');
+  };
+
+  // 捕获推送内容，不依赖桥接服务
+  let pushed = null;
+  window.fetch = async (url, opts) => {
+    if (String(url).includes('/push')) {
+      pushed = JSON.parse(opts.body);
+      return { ok: true, status: 200, json: async () => ({ ok: true, seq: 1 }) };
+    }
+    return { ok: false, status: 0, json: async () => ({}) };
+  };
+
+  const clickAt = (x, y) => {
+    const el = document.elementFromPoint(x, y) || document.body;
+    const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+    return el;
+  };
+  const typeComment = (text) => {
+    const input = document.querySelector('#__dsh_picker_anno_bubble__ .dp-input');
+    if (!input) return false;
+    input.value = text;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    return true;
+  };
+
+  await wait(500);
+
+  // 1. 悬浮按钮 → 模式菜单
+  const fab = document.getElementById('__dsh_picker_fab__');
+  ok(!!fab, '悬浮按钮已挂载');
+  fab.click();
+  await wait(60);
+  const menu = document.getElementById('__dsh_picker_menu__');
+  ok(!!menu, '单击按钮弹出模式菜单');
+  ok(menu && menu.querySelectorAll('.dp-menu-item').length === 2, '菜单有两项', menu && menu.querySelectorAll('.dp-menu-item').length);
+
+  // 2. 进入批注模式
+  menu.querySelector('[data-mode="annotate"]').click();
+  await wait(60);
+  const bar = document.getElementById('__dsh_picker_anno_bar__');
+  ok(!!bar, '批注工具栏出现');
+  ok(bar && /正在批注/.test(bar.querySelector('.dp-label').textContent), '工具栏标签', bar && bar.querySelector('.dp-label').textContent);
+  ok(fab.style.display === 'none', '批注时隐藏悬浮按钮');
+  ok(!document.getElementById('__dsh_picker_menu__'), '选中模式后菜单关闭');
+
+  // 3. 页面打点 → 编号标记 + 评论气泡
+  clickAt(240, 60);            // 落在 h1 标题上
+  await wait(60);
+  let pins = document.querySelectorAll('.dp-pin');
+  let bubble = document.getElementById('__dsh_picker_anno_bubble__');
+  ok(pins.length === 1, '第一个标记出现', pins.length);
+  ok(pins[0] && pins[0].textContent === '1', '标记编号为 1', pins[0] && pins[0].textContent);
+  ok(bubble && bubble.classList.contains('is-open'), '评论气泡打开');
+  ok(document.activeElement && document.activeElement.classList.contains('dp-input'), '气泡输入框自动聚焦',
+    document.activeElement && document.activeElement.className);
+  const rect = pins[0] && pins[0].getBoundingClientRect();
+  ok(rect && Math.abs(rect.left + rect.width / 2 - 240) < 2 && Math.abs(rect.top + rect.height / 2 - 60) < 2,
+    '标记落在点击位置', rect && [Math.round(rect.left + rect.width / 2), Math.round(rect.top + rect.height / 2)].join(','));
+
+  // 4. 写评论 + Enter 保存
+  typeComment('标题太大，缩小 20%');
+  await wait(60);
+  pins = document.querySelectorAll('.dp-pin');
+  ok(!bubble.classList.contains('is-open'), 'Enter 后气泡关闭');
+  ok(pins[0].classList.contains('has-comment'), '有评论的标记带小圆点');
+  ok(/正在批注 · 1/.test(bar.querySelector('.dp-label').textContent), '工具栏计数 1', bar.querySelector('.dp-label').textContent);
+
+  // 5. 第二条：点图片区域
+  clickAt(620, 300);
+  await wait(60);
+  typeComment('这张插画饱和度太高，降一点');
+  await wait(60);
+  pins = document.querySelectorAll('.dp-pin');
+  ok(pins.length === 2, '第二个标记出现', pins.length);
+  ok(/正在批注 · 2/.test(bar.querySelector('.dp-label').textContent), '工具栏计数 2', bar.querySelector('.dp-label').textContent);
+
+  // 6. 元素轮廓：默认不画（页面保持干净），点准星按钮才全画
+  ok(document.querySelectorAll('#__dsh_picker_anno_ring__ .dp-ring').length === 0, '默认不画元素轮廓');
+  bar.querySelector('.dp-rings').click();
+  await wait(40);
+  const rings = document.querySelectorAll('#__dsh_picker_anno_ring__ .dp-ring');
+  ok(rings.length === 2, '准星按钮可显示全部轮廓', rings.length);
+  ok([...rings].every((r) => r.style.display !== 'none' && parseFloat(r.style.width) > 0), '轮廓有真实尺寸');
+  bar.querySelector('.dp-rings').click();
+  await wait(40);
+  ok(document.querySelectorAll('#__dsh_picker_anno_ring__ .dp-ring').length === 0, '再点一次收起轮廓');
+
+  // 7. 点回第一条，编辑已有评论
+  pins[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  await wait(60);
+  const input = bubble.querySelector('.dp-input');
+  ok(bubble.classList.contains('is-open') && input.value.includes('标题太大'), '点标记可回看/编辑评论', input.value);
+  input.value = '标题太大，缩小 20%，并改成两行';
+  bubble.querySelector('.dp-ok').click();
+  await wait(60);
+
+  // 8. 隐藏 / 显示
+  bar.querySelector('.dp-eye').click();
+  await wait(40);
+  ok(document.getElementById('__dsh_picker_anno_layer__').classList.contains('is-hidden'), '眼睛按钮可隐藏标记');
+  bar.querySelector('.dp-eye').click();
+  await wait(40);
+  ok(!document.getElementById('__dsh_picker_anno_layer__').classList.contains('is-hidden'), '再点一次恢复显示');
+
+  // 9. 文本格式（与 client.js 的 formatAnnotationsBlock 同格式：一条两行）
+  const text = window.dshUiPicker.formatAnnotations();
+  ok(text.includes('【页面批注】共 2 条'), '文本标题', text.split('\n')[0]);
+  ok(text.includes('页面坐标 ('), '带页面坐标');
+  ok(text.includes('#hero-title') && text.includes('#hero'), '带目标控件选择器', text.split('\n')[6]);
+  ok(text.includes('元素内 ('), '带元素内相对位置');
+  ok(text.includes('批注：标题太大，缩小 20%，并改成两行'), '带第一条评论');
+  ok(text.includes('批注：这张插画饱和度太高，降一点'), '带第二条评论');
+  ok(/修改需求：\s*$/.test(text), '结尾留「修改需求：」空行');
+  ok(text.split('\n').length < 14, '一条占两行，整体够紧凑', text.split('\n').length + ' 行');
+  lines.push('--- 发送文本预览 ---');
+  lines.push(text);
+  flush();
+
+  // 10. 发送：推送到桥接（这里被 fetch 桩捕获），清空并退出
+  bar.querySelector('.dp-send').click();
+  await wait(120);
+  ok(!!pushed && pushed.text.includes('【页面批注】共 2 条'), '发送时把批注清单推到桥接');
+  ok(pushed && pushed.meta && pushed.meta.from === location.host, 'meta 带来源站点');
+  const meta = (pushed && pushed.meta) || {};
+  ok(meta.kind === 'annotations', 'meta.kind = annotations（DSH 侧据此渲染注释胶囊）', meta.kind);
+  const annos = Array.isArray(meta.annotations) ? meta.annotations : [];
+  ok(annos.length === 2, '带上结构化注释条数', annos.length);
+  ok(annos.every((a) => a.uid && a.tag && a.label && typeof a.comment === 'string'), '每条带 uid / tag / label / comment',
+    annos[0] && Object.keys(annos[0]).join(','));
+  ok(annos.every((a) => typeof a.thumb === 'string' && a.thumb.startsWith('data:image/png;base64,')),
+    '每条带元素小缩略图', annos[0] && annos[0].thumb && annos[0].thumb.slice(0, 24));
+  ok(annos[0].thumb.length > 200, '缩略图不是空图', annos[0] && annos[0].thumb.length + ' chars');
+  ok(meta.page && meta.page.title, '带页面信息', meta.page && meta.page.url);
+  ok(document.querySelectorAll('.dp-pin').length === 0, '发送后标记清空');
+  ok(!document.getElementById('__dsh_picker_anno_bar__'), '发送后退出批注模式');
+  ok(fab.style.display !== 'none', '发送后悬浮按钮回来');
+
+  // 11. Esc 退出但保留标记
+  window.dshUiPicker.annotate();
+  await wait(40);
+  clickAt(430, 540);
+  await wait(40);
+  typeComment('这块留白太多');
+  await wait(40);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await wait(60);
+  ok(!document.getElementById('__dsh_picker_anno_bar__'), 'Esc 退出批注模式');
+  ok(document.querySelectorAll('.dp-pin').length === 1, 'Esc 退出后标记保留', document.querySelectorAll('.dp-pin').length);
+  document.querySelectorAll('.dp-pin')[0].click();
+  await wait(50);
+  ok(bubble.classList.contains('is-open'), '退出模式后仍可点标记改评论');
+  bubble.querySelector('.dp-remove').click();
+  await wait(50);
+  ok(document.querySelectorAll('.dp-pin').length === 0, '气泡里的删除按钮能删掉这条');
+
+  // 12. 批注 ⇄ 拾取 切换：标记保留、工具栏收起，且标记不会被当成页面控件
+  window.dshUiPicker.annotate();
+  await wait(40);
+  clickAt(300, 60);
+  await wait(40);
+  typeComment('切换模式测试');
+  await wait(40);
+  window.dshUiPicker.start();
+  await wait(80);
+  ok(!document.getElementById('__dsh_picker_anno_bar__'), '切到拾取模式时收走批注工具栏');
+  ok(document.querySelectorAll('.dp-pin').length === 1, '切模式后标记保留', document.querySelectorAll('.dp-pin').length);
+  window.dshUiPicker.stop();
+  await wait(40);
+  window.dshUiPicker.annotate();
+  await wait(60);
+  ok(!!document.getElementById('__dsh_picker_anno_bar__'), '再回到批注模式工具栏回来');
+  window.dshUiPicker.clearAnnotations();
+  window.dshUiPicker.stopAnnotate();
+  await wait(40);
+  ok(document.querySelectorAll('.dp-pin').length === 0, '清空后标记全部消失');
+
+  lines.push('');
+  lines.push(failed === 0 ? 'ALL PASS' : failed + ' FAILED');
+  flush();
+  document.title = failed === 0 ? 'PASS' : 'FAIL(' + failed + ')';
+})();
+</script>
+</body>
+</html>

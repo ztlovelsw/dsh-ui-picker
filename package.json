@@ -1,7 +1,7 @@
 {
   "name": "dsh-ui-picker",
-  "version": "0.1.4",
-  "description": "点选前端页面上的任意 UI 控件，自动把控件详情（标签/CSS 选择器/XPath/组件名/样式）写入 DeepSeek Harness 输入框，让 AI 精准定位要改的界面元素。",
+  "version": "0.3.0",
+  "description": "点选或批注前端页面：点一下控件拿到选择器/样式，或在页面上钉编号标记逐条写批注，发送后在 DeepSeek Harness 输入框上方以「N 条注释」逐条校对，再交给 AI。",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -40,7 +40,16 @@
     "dom-inspector",
     "ui-inspector",
     "code-agent",
-    "web-development"
+    "web-development",
+    "annotation",
+    "page-annotation",
+    "visual-feedback",
+    "comment",
+    "markup",
+    "feedback",
+    "composer-chip",
+    "annotation-chip",
+    "inline-comments"
   ],
   "license": "MIT",
   "author": "ztlovelsw",
@@ -56,7 +65,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node tests/bridge-test.mjs && node tests/client-test.mjs && node tests/client-dup-test.mjs",
+    "test": "node scripts/sync-userscript.mjs --check && node tests/bridge-test.mjs && node tests/client-test.mjs && node tests/client-dup-test.mjs",
+    "sync:user": "node scripts/sync-userscript.mjs",
     "install:dsh": "node install.mjs"
   },
   "peerDependencies": {

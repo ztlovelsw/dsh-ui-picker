@@ -130,8 +130,9 @@
     <section class="hero">
       <h1>UI 拾取器演示页</h1>
       <p>
-        点右下角的<b>取景框小按钮</b>（或按 <code>Ctrl+Shift+P</code>），再点下面任意控件，
+        点右下角的<b>取景框小按钮</b>，菜单里选「选取控件」（或按 <code>Ctrl+Shift+P</code>），再点下面任意控件，
         它的标签、选择器、样式就会出现在 DeepSeek Harness 的输入框里。<br />
+        选「页面批注」（或按 <code>Ctrl+Shift+A</code>）则可以在页面上钉编号标记、逐条写要改的地方，再一次发出去。<br />
         看不到那个小按钮，说明页面没加载到 <code>http://127.0.0.1:17857/picker.js</code>（DSH 插件没启动）。<br />
         小按钮可以<b>按住拖动</b>到任意位置（会记住，右键还原到右下角）。
       </p>
@@ -200,8 +201,11 @@
       1. 点「提交订单」→ 输入框补一句「改成圆角 12px、主色换成 #7c3aed」<br />
       2. 点「成交额」那个数字 → 补一句「字号加大到 20px 并加粗」<br />
       3. 点表头的「状态」→ 补一句「这一列居中」<br />
+      4. 按 <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd> 进批注模式：在标题、按钮、表格上各钉一个标记并写一句话，
+      点工具栏「发送」，三处改动一次说清<br />
       <br />
-      快捷键：<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> 开关拾取；<kbd>Esc</kbd> 取消；
+      快捷键：<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> 拾取；<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd> 批注；
+      <kbd>Esc</kbd> 退出；
       按住 <kbd>Shift</kbd> 点选可加选多个控件，底部会出现「已选 N 个」面板，按 <kbd>Enter</kbd> 一次发送、<kbd>Esc</kbd> 取消。
     </section>
   </main>

@@ -1,13 +1,15 @@
 /**
- * dsh-ui-picker — 页面端「UI 控件拾取器」
+ * dsh-ui-picker — 页面端「UI 控件拾取器 / 页面批注」
  *
  * 用法（三选一）：
  *   1. 在你的页面里加一行：<script src="http://127.0.0.1:17857/picker.js"></script>
  *   2. 控制台粘贴本文件全部内容
  *   3. 装成油猴脚本（见同目录 dsh-ui-picker.user.js）
  *
- * 交互：点右下角的取景框按钮（或 Ctrl+Shift+P）进入拾取模式 → 鼠标悬停高亮 →
- *       点击目标控件 → 控件详情自动写入 DSH 输入框。
+ * 两种模式（点右下角小按钮选择，或用快捷键）：
+ *   选取控件（Ctrl+Shift+P）：悬停高亮 → 点击控件 → 选择器/样式自动写入 DSH 输入框。
+ *   页面批注（Ctrl+Shift+A）：在页面任意位置钉编号标记 → 每条写一句评论 →
+ *     一次性压成编号清单写入 DSH 输入框（适合「这几处都要改」的场景）。
  */
 (function () {
   'use strict';
@@ -354,7 +356,7 @@
   }
 
   // ---------- 与 DSH 桥接通信 ----------
-  async function push(text) {
+  async function push(text, extra) {
     // 同一份内容 900ms 内只发一次：防止事件重入/双实例导致的重复写入
     const now = Date.now();
     if (text === lastPush.text && now - lastPush.at < 900) return true;
@@ -363,9 +365,13 @@
       const response = await fetch(PUSH_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        // extra 带结构化数据（批注清单 / 缩略图），DSH 侧据此渲染输入框上方的注释胶囊
         body: JSON.stringify({
           text,
-          meta: { from: location.host, url: location.href, title: document.title, ts: Date.now() },
+          meta: Object.assign(
+            { from: location.host, url: location.href, title: document.title, ts: Date.now() },
+            extra || null,
+          ),
         }),
         mode: 'cors',
         keepalive: true,
@@ -618,13 +624,18 @@
   }
 
   // ---------- 拾取事件 ----------
+  /** 插件自己的 UI（悬浮按钮、批注标记、工具栏、评论气泡）不算页面控件。 */
+  function isPickerUi(node) {
+    return !!(node && node.closest && (node.closest('#__dsh_picker_fab__') || annoUiNode(node)));
+  }
+
   /** 取事件最深目标：穿透 Shadow DOM（mousemove/click 的 target 会被重定向到宿主）。 */
   function deepTarget(event) {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
     if (path && path.length) {
       for (const node of path) {
         if (node instanceof Element && node !== overlay && node !== tip) {
-          if (node.closest && node.closest('#__dsh_picker_fab__')) continue;
+          if (isPickerUi(node)) continue;
           return node;
         }
       }
@@ -639,7 +650,7 @@
     const y = event.clientY;
     rafId = requestAnimationFrame(() => {
       const el = deepTarget(event) || document.elementFromPoint(x, y);
-      if (!el || el === overlay || el === tip || (el.closest && el.closest('#__dsh_picker_fab__'))) return;
+      if (!el || el === overlay || el === tip || isPickerUi(el)) return;
       hoverEl = el;
       paint(el, event);
     });
@@ -647,8 +658,8 @@
 
   async function onPick(event) {
     if (!picking) return;
-    // 点在按钮自己身上：交给按钮的 click 处理（切换拾取），别把按钮本身当目标
-    if (event.target && event.target.closest && event.target.closest('#__dsh_picker_fab__')) return;
+    // 点在自己的 UI 上：交给它们自己处理（按钮开菜单、标记回看评论），别当成页面控件
+    if (isPickerUi(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -707,6 +718,8 @@
 
   function startPicking() {
     if (picking) return;
+    if (annotating) stopAnnotating();
+    hideModeMenu();
     picking = true;
     ensureOverlay();
     document.addEventListener('mousemove', onMove, true);
@@ -729,6 +742,968 @@
     hideBatchPanel();
     setFabState(false);
     hidePaint();
+  }
+
+  // ---------- 批注模式 ----------
+  /**
+   * 「批注」是「拾取」的另一半：
+   *   拾取 = 说清「改哪个控件」（选择器 / 样式 / 组件名）；
+   *   批注 = 说清「页面哪个位置、这块要改成什么」，还能一条条写评论。
+   * 每条批注锚在文档坐标上（跟滚动无关），发送时压成编号清单写进 DSH 输入框。
+   */
+  let annotating = false;
+  let annoSeq = 0;
+  /** 每次页面加载生成一个前缀：DSH 侧按 uid 合并，同一条批注不会被算两遍 */
+  const ANNO_UID = `a${Date.now().toString(36)}`;
+  const annots = [];
+  /**
+   * 是否一直画出所有批注的元素轮廓。
+   * 默认关（页面保持干净，跟设计稿一样只有编号点）；鼠标划过某个标记、
+   * 或正在编辑它的评论时，单独描出它对应的元素。
+   */
+  let showRings = false;
+  /** 鼠标正悬停的标记（临时描出它的元素轮廓） */
+  let ringHoverId = 0;
+  /** 临时隐藏所有标记，方便看清页面原貌 */
+  let pinsHidden = false;
+  /** 正在编辑评论的批注 id（0 = 没有） */
+  let bubbleAnnoId = 0;
+  let annoSyncFrame = 0;
+
+  const ANNO_LAYER_ID = '__dsh_picker_anno_layer__';
+  const ANNO_RING_ID = '__dsh_picker_anno_ring__';
+  const ANNO_BAR_ID = '__dsh_picker_anno_bar__';
+  const BUBBLE_ID = '__dsh_picker_anno_bubble__';
+  /** 批注自己的 UI：落在这里的点击/移动不能当成「在页面上打点」 */
+  const ANNO_SELF = `.dp-pin, #${ANNO_BAR_ID}, #${BUBBLE_ID}`;
+
+  const ANNO_ICON = {
+    target:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="6.6" stroke="currentColor" stroke-width="1.7"/>' +
+      '<path d="M12 2.4v3.2M12 18.4v3.2M2.4 12h3.2M18.4 12h3.2" stroke="currentColor" ' +
+      'stroke-width="1.7" stroke-linecap="round"/></svg>',
+    eye:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M2.6 12S6.2 5.8 12 5.8 21.4 12 21.4 12 17.8 18.2 12 18.2 2.6 12 2.6 12Z" ' +
+      'stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' +
+      '<circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.7"/></svg>',
+    eyeOff:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M4 4.4 20 20.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<path d="M9.6 6.3A9.7 9.7 0 0 1 12 5.9c5.8 0 9.4 6.2 9.4 6.2a17 17 0 0 1-3.1 3.7M6.5 8.1A17 17 0 0 0 2.6 12s3.6 6.2 9.4 6.2a9.4 9.4 0 0 0 3.5-.68" ' +
+      'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="M10.2 10.3a2.6 2.6 0 0 0 3.6 3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    copy:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<rect x="8.6" y="8.6" width="11.8" height="11.8" rx="2.4" stroke="currentColor" stroke-width="1.7"/>' +
+      '<path d="M15.4 5.6a2 2 0 0 0-2-2H5.6a2 2 0 0 0-2 2v7.8a2 2 0 0 0 2 2" ' +
+      'stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    trash:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M4.4 6.6h15.2M9.4 6.6V4.7c0-.7.6-1.3 1.3-1.3h2.6c.7 0 1.3.6 1.3 1.3v1.9" ' +
+      'stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<path d="M6.6 6.6l.8 12.1c.06.9.8 1.6 1.7 1.6h5.8c.9 0 1.64-.7 1.7-1.6l.8-12.1" ' +
+      'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="M10.6 10.4v6.1M13.4 10.4v6.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    check:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M5.2 12.6l4.3 4.2 9.3-9.6" stroke="currentColor" stroke-width="2.1" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    close:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M6.4 6.4l11.2 11.2M17.6 6.4L6.4 17.6" stroke="currentColor" stroke-width="1.9" ' +
+      'stroke-linecap="round"/></svg>',
+    grip:
+      '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">' +
+      '<circle cx="3" cy="3" r="1.15"/><circle cx="7" cy="3" r="1.15"/>' +
+      '<circle cx="3" cy="7" r="1.15"/><circle cx="7" cy="7" r="1.15"/>' +
+      '<circle cx="3" cy="11" r="1.15"/><circle cx="7" cy="11" r="1.15"/></svg>',
+  };
+
+  const ANNO_CSS = `
+#__dsh_picker_anno_layer__ {
+  position: fixed; inset: 0; z-index: 2147483644;
+  pointer-events: none;
+  font: 500 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+#__dsh_picker_anno_layer__.is-hidden { display: none; }
+#__dsh_picker_anno_ring__ {
+  position: fixed; inset: 0; z-index: 2147483642; pointer-events: none;
+}
+.dp-ring {
+  position: absolute; box-sizing: border-box;
+  border: 1.5px dashed rgba(47, 111, 237, .78);
+  border-radius: 7px;
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, .08);
+}
+.dp-pin {
+  position: fixed; width: 23px; height: 23px; padding: 0; margin: 0;
+  transform: translate(-50%, -50%);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 2px solid #fff;
+  background: #3b76f0; color: #fff;
+  font: 700 11.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  box-shadow: 0 3px 10px rgba(47, 111, 237, .42), 0 0 0 1px rgba(47, 111, 237, .22);
+  cursor: pointer; pointer-events: auto; touch-action: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .14s cubic-bezier(.2,.8,.2,1), box-shadow .14s ease, background-color .14s ease;
+}
+.dp-pin:hover { background: #2560e0; transform: translate(-50%, -50%) scale(1.14); }
+.dp-pin.is-active {
+  background: #1d4ed8;
+  box-shadow: 0 0 0 4px rgba(47, 111, 237, .2), 0 6px 16px rgba(29, 78, 216, .45);
+}
+.dp-pin.is-dragging {
+  transition: none; cursor: grabbing; transform: translate(-50%, -50%) scale(1.16);
+}
+.dp-pin.is-offscreen { opacity: 0; pointer-events: none; }
+.dp-pin.has-comment::after {
+  content: ''; position: absolute; right: -2px; bottom: -2px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #34d399; border: 1.5px solid #fff;
+}
+
+#__dsh_picker_anno_bar__ {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(17, 24, 39, .93);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow: 0 18px 42px -18px rgba(15, 23, 42, .75);
+  color: #e5e7eb;
+  font: 500 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-user-select: none; user-select: none;
+}
+#__dsh_picker_anno_bar__.is-dragging { transition: none; }
+#__dsh_picker_anno_bar__ .dp-grip {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 24px; margin-right: 2px;
+  color: rgba(229, 231, 235, .34); cursor: grab; touch-action: none;
+}
+#__dsh_picker_anno_bar__ .dp-grip:active { cursor: grabbing; }
+#__dsh_picker_anno_bar__ .dp-label {
+  padding: 0 10px 0 2px; white-space: nowrap; font-weight: 600; letter-spacing: .01em;
+}
+#__dsh_picker_anno_bar__ .dp-sep {
+  width: 1px; height: 16px; margin: 0 4px; background: rgba(255, 255, 255, .12);
+}
+#__dsh_picker_anno_bar__ .dp-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 27px; height: 27px; padding: 0; border: 0; border-radius: 7px;
+  background: transparent; color: rgba(229, 231, 235, .82);
+  cursor: pointer; transition: background-color .14s ease, color .14s ease, opacity .14s ease;
+  font: inherit;
+}
+#__dsh_picker_anno_bar__ .dp-icon:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+#__dsh_picker_anno_bar__ .dp-icon.is-off { color: rgba(229, 231, 235, .42); }
+#__dsh_picker_anno_bar__ .dp-icon:disabled { opacity: .32; cursor: default; }
+#__dsh_picker_anno_bar__ .dp-icon:disabled:hover { background: transparent; color: rgba(229, 231, 235, .82); }
+#__dsh_picker_anno_bar__ .dp-close { margin-left: 2px; }
+#__dsh_picker_anno_bar__ .dp-send {
+  height: 27px; margin-left: 2px; padding: 0 13px;
+  border: 0; border-radius: 8px; background: #3b76f0; color: #fff;
+  font: inherit; font-weight: 600; cursor: pointer;
+  transition: background-color .14s ease, opacity .14s ease;
+}
+#__dsh_picker_anno_bar__ .dp-send:hover { background: #2f68e6; }
+#__dsh_picker_anno_bar__ .dp-send:disabled { opacity: .45; cursor: default; }
+
+#__dsh_picker_anno_bubble__ {
+  position: fixed; z-index: 2147483647;
+  display: none;
+  align-items: center; gap: 6px;
+  width: min(320px, 88vw);
+  padding: 6px 6px 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, .1);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 16px 36px -14px rgba(15, 23, 42, .45);
+  font: 500 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+#__dsh_picker_anno_bubble__.is-open { display: flex; }
+#__dsh_picker_anno_bubble__ .dp-input {
+  flex: 1 1 auto; min-width: 0; height: 26px;
+  padding: 0; margin: 0; border: 0; outline: none; background: transparent;
+  color: #0f172a; font: inherit;
+}
+#__dsh_picker_anno_bubble__ .dp-input::placeholder { color: rgba(15, 23, 42, .35); }
+#__dsh_picker_anno_bubble__ .dp-ok {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; flex: none;
+  border: 0; border-radius: 50%; background: #3b76f0; color: #fff; cursor: pointer;
+  transition: background-color .14s ease, transform .14s ease;
+}
+#__dsh_picker_anno_bubble__ .dp-ok:hover { background: #2560e0; transform: scale(1.06); }
+#__dsh_picker_anno_bubble__ .dp-remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; flex: none;
+  border: 0; border-radius: 8px; background: transparent;
+  color: rgba(15, 23, 42, .38); cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
+}
+#__dsh_picker_anno_bubble__ .dp-remove:hover { background: rgba(239, 68, 68, .1); color: #dc2626; }
+
+@media (prefers-color-scheme: dark) {
+  #__dsh_picker_anno_bubble__ {
+    border-color: rgba(255, 255, 255, .1);
+    background: rgba(17, 24, 39, .97);
+    box-shadow: 0 18px 40px -14px rgba(0, 0, 0, .75);
+  }
+  #__dsh_picker_anno_bubble__ .dp-input { color: #e5e7eb; }
+  #__dsh_picker_anno_bubble__ .dp-input::placeholder { color: rgba(226, 232, 240, .38); }
+  #__dsh_picker_anno_bubble__ .dp-remove { color: rgba(226, 232, 240, .45); }
+  #__dsh_picker_anno_bubble__ .dp-remove:hover { background: rgba(239, 68, 68, .18); color: #fca5a5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp-pin, #__dsh_picker_anno_bar__ .dp-icon, #__dsh_picker_anno_bar__ .dp-send,
+  #__dsh_picker_anno_bubble__ .dp-ok { transition: none; }
+}
+`;
+
+  function ensureAnnoStyle() {
+    if (document.getElementById('__dsh_picker_anno_css__')) return;
+    const style = document.createElement('style');
+    style.id = '__dsh_picker_anno_css__';
+    style.textContent = ANNO_CSS;
+    document.head.appendChild(style);
+  }
+
+  /** 事件目标是否落在批注 UI 自己身上。 */
+  function annoUiNode(node) {
+    return !!(node && node.closest && node.closest(ANNO_SELF));
+  }
+
+  const scrollLeft = () => window.scrollX || window.pageXOffset || 0;
+  const scrollTop = () => window.scrollY || window.pageYOffset || 0;
+
+  /** 视口坐标 → 文档坐标（批注锚点用文档坐标，滚动后仍然贴在同一块内容上）。 */
+  function docPoint(clientX, clientY) {
+    return { x: Math.round(clientX + scrollLeft()), y: Math.round(clientY + scrollTop()) };
+  }
+
+  /** 穿透 shadow root 的命中测试。 */
+  function deepElementAt(x, y) {
+    let el = document.elementFromPoint(x, y);
+    let guard = 0;
+    while (el && el.shadowRoot && guard < 6) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+      guard += 1;
+    }
+    return el instanceof Element ? el : null;
+  }
+
+  function targetAt(x, y) {
+    const el = deepElementAt(x, y);
+    if (!el || annoUiNode(el)) return null;
+    if (el === document.documentElement || el === document.body) return null;
+    return el;
+  }
+
+  function ensureAnnoLayer() {
+    ensureAnnoStyle();
+    let layer = document.getElementById(ANNO_LAYER_ID);
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = ANNO_LAYER_ID;
+      document.documentElement.appendChild(layer);
+    }
+    if (!document.getElementById(ANNO_RING_ID)) {
+      const rings = document.createElement('div');
+      rings.id = ANNO_RING_ID;
+      document.documentElement.appendChild(rings);
+    }
+    return layer;
+  }
+
+  function annoIndexById(id) {
+    return annots.findIndex((item) => item.id === id);
+  }
+
+  /** 把一条批注钉在页面上：编号点 + 可拖动。 */
+  function makePin(anno, index) {
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    pin.className = 'dp-pin';
+    pin.dataset.annoId = String(anno.id);
+    pin.textContent = String(index + 1);
+    if (anno.comment) pin.classList.add('has-comment');
+    if (anno.id === bubbleAnnoId) pin.classList.add('is-active');
+    pin.title = anno.comment
+      ? `${index + 1}. ${clip(anno.comment, 60)}`
+      : `${index + 1}. 点这里写评论`;
+
+    let drag = null;
+    let suppressClickUntil = 0;
+
+    pin.addEventListener('pointerdown', (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      event.stopPropagation();
+      drag = {
+        id: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        x: anno.x,
+        y: anno.y,
+        moved: false,
+      };
+      try {
+        pin.setPointerCapture(event.pointerId);
+      } catch (_) {
+        /* 老浏览器忽略 */
+      }
+    });
+
+    pin.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!drag.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+      drag.moved = true;
+      pin.classList.add('is-dragging');
+      anno.x = Math.round(drag.x + dx);
+      anno.y = Math.round(drag.y + dy);
+      syncAnnoLayout();
+    });
+
+    const endDrag = (event) => {
+      if (!drag) return;
+      const moved = drag.moved;
+      drag = null;
+      pin.classList.remove('is-dragging');
+      try {
+        pin.releasePointerCapture(event.pointerId);
+      } catch (_) {
+        /* 忽略 */
+      }
+      if (moved) suppressClickUntil = Date.now() + 260;
+    };
+    pin.addEventListener('pointerup', endDrag);
+    pin.addEventListener('pointercancel', endDrag);
+
+    pin.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (Date.now() < suppressClickUntil) return;
+      openBubble(anno);
+    });
+
+    // 划过标记时临时描出它锚定的元素：既能核对选对了没有，又不打扰页面
+    pin.addEventListener('mouseenter', () => {
+      ringHoverId = anno.id;
+      syncRings();
+    });
+    pin.addEventListener('mouseleave', () => {
+      if (ringHoverId === anno.id) ringHoverId = 0;
+      syncRings();
+    });
+
+    return pin;
+  }
+
+  function renderPins() {
+    const layer = ensureAnnoLayer();
+    layer.textContent = '';
+    annots.forEach((anno, index) => layer.appendChild(makePin(anno, index)));
+    layer.classList.toggle('is-hidden', pinsHidden);
+    syncAnnoLayout();
+  }
+
+  /** 滚动 / 缩放 / 拖拽后重新对齐钉子、轮廓和评论气泡。 */
+  function syncAnnoLayout() {
+    const layer = document.getElementById(ANNO_LAYER_ID);
+    if (layer) {
+      const sx = scrollLeft();
+      const sy = scrollTop();
+      for (const pin of Array.from(layer.children)) {
+        const anno = annots.find((item) => String(item.id) === pin.dataset.annoId);
+        if (!anno) continue;
+        const left = anno.x - sx;
+        const top = anno.y - sy;
+        pin.style.left = `${left}px`;
+        pin.style.top = `${top}px`;
+        pin.classList.toggle(
+          'is-offscreen',
+          left < -40 || top < -40 || left > innerWidth + 40 || top > innerHeight + 40,
+        );
+      }
+    }
+    syncRings();
+    positionBubble();
+  }
+
+  function syncRings() {
+    const host = document.getElementById(ANNO_RING_ID);
+    if (!host) return;
+    const wanted = pinsHidden
+      ? []
+      : annots.filter(
+          (anno) => showRings || anno.id === ringHoverId || anno.id === bubbleAnnoId,
+        );
+    if (!wanted.length) {
+      while (host.firstChild) host.removeChild(host.firstChild);
+      return;
+    }
+    while (host.children.length < wanted.length) host.appendChild(document.createElement('div'));
+    while (host.children.length > wanted.length) host.lastElementChild.remove();
+    wanted.forEach((anno, index) => {
+      const ring = host.children[index];
+      ring.className = 'dp-ring';
+      const rect = anno.el && anno.el.isConnected ? anno.el.getBoundingClientRect() : null;
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        ring.style.display = 'none';
+        return;
+      }
+      ring.style.display = 'block';
+      ring.style.left = `${Math.round(rect.left)}px`;
+      ring.style.top = `${Math.round(rect.top)}px`;
+      ring.style.width = `${Math.round(rect.width)}px`;
+      ring.style.height = `${Math.round(rect.height)}px`;
+    });
+  }
+
+  function scheduleAnnoSync() {
+    if (annoSyncFrame || !annots.length) return;
+    annoSyncFrame = requestAnimationFrame(() => {
+      annoSyncFrame = 0;
+      syncAnnoLayout();
+    });
+  }
+
+  // ---------- 批注工具栏 ----------
+  function attachBarDrag(bar) {
+    const grip = bar.querySelector('.dp-grip');
+    let drag = null;
+
+    grip.addEventListener('pointerdown', (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = bar.getBoundingClientRect();
+      bar.classList.add('is-dragging');
+      bar.style.left = `${rect.left}px`;
+      bar.style.top = `${rect.top}px`;
+      bar.style.bottom = 'auto';
+      bar.style.transform = 'none';
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+      try {
+        grip.setPointerCapture(event.pointerId);
+      } catch (_) {
+        /* 忽略 */
+      }
+    });
+
+    grip.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const left = Math.min(
+        Math.max(6, drag.left + (event.clientX - drag.x)),
+        Math.max(6, innerWidth - bar.offsetWidth - 6),
+      );
+      const top = Math.min(
+        Math.max(6, drag.top + (event.clientY - drag.y)),
+        Math.max(6, innerHeight - bar.offsetHeight - 6),
+      );
+      bar.style.left = `${left}px`;
+      bar.style.top = `${top}px`;
+    });
+
+    const endDrag = (event) => {
+      if (!drag) return;
+      drag = null;
+      bar.classList.remove('is-dragging');
+      try {
+        grip.releasePointerCapture(event.pointerId);
+      } catch (_) {
+        /* 忽略 */
+      }
+    };
+    grip.addEventListener('pointerup', endDrag);
+    grip.addEventListener('pointercancel', endDrag);
+  }
+
+  function ensureAnnoBar() {
+    ensureAnnoStyle();
+    let bar = document.getElementById(ANNO_BAR_ID);
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.id = ANNO_BAR_ID;
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', '页面批注');
+    bar.innerHTML =
+      `<span class="dp-grip" title="拖动移动工具栏">${ANNO_ICON.grip}</span>` +
+      '<span class="dp-label">正在批注</span>' +
+      '<span class="dp-sep"></span>' +
+      `<button type="button" class="dp-icon dp-rings" title="隐藏元素轮廓">${ANNO_ICON.target}</button>` +
+      `<button type="button" class="dp-icon dp-eye" title="隐藏标记">${ANNO_ICON.eyeOff}</button>` +
+      `<button type="button" class="dp-icon dp-copy" title="复制批注文本">${ANNO_ICON.copy}</button>` +
+      `<button type="button" class="dp-icon dp-trash" title="清空批注">${ANNO_ICON.trash}</button>` +
+      '<button type="button" class="dp-send" title="发送到 DSH（Ctrl+Enter）">发送</button>' +
+      `<button type="button" class="dp-icon dp-close" title="退出批注（标记保留）">${ANNO_ICON.close}</button>`;
+
+    // 工具栏自己的事件不要漏到页面（否则会顺手钉一条批注）
+    for (const type of ['click', 'pointerdown', 'pointerup', 'mousedown']) {
+      bar.addEventListener(type, (event) => event.stopPropagation());
+    }
+
+    bar.querySelector('.dp-rings').addEventListener('click', () => {
+      showRings = !showRings;
+      renderAnnoBar();
+      syncAnnoLayout();
+    });
+    bar.querySelector('.dp-eye').addEventListener('click', () => {
+      pinsHidden = !pinsHidden;
+      renderAnnoBar();
+      renderPins();
+    });
+    bar.querySelector('.dp-copy').addEventListener('click', () => void copyAnnotations());
+    bar.querySelector('.dp-trash').addEventListener('click', () => {
+      const count = annots.length;
+      if (!count) return;
+      clearAnnotations();
+      toast(`已清空 ${count} 条批注`);
+    });
+    bar.querySelector('.dp-send').addEventListener('click', () => void sendAnnotations());
+    bar.querySelector('.dp-close').addEventListener('click', () => {
+      stopAnnotating();
+      toast(annots.length ? `已退出批注，${annots.length} 条标记保留在页面上` : '已退出批注');
+    });
+
+    attachBarDrag(bar);
+    document.documentElement.appendChild(bar);
+    return bar;
+  }
+
+  function renderAnnoBar() {
+    // 不在批注模式时不要顺手把工具栏建出来（关闭气泡/清空批注也会走到这里）
+    if (!annotating) {
+      const stale = document.getElementById(ANNO_BAR_ID);
+      if (stale) stale.remove();
+      return;
+    }
+    const bar = ensureAnnoBar();
+    const count = annots.length;
+    bar.querySelector('.dp-label').textContent = count ? `正在批注 · ${count}` : '正在批注';
+
+    const ringsBtn = bar.querySelector('.dp-rings');
+    ringsBtn.classList.toggle('is-off', !showRings);
+    ringsBtn.title = showRings ? '隐藏元素轮廓' : '显示元素轮廓';
+
+    const eyeBtn = bar.querySelector('.dp-eye');
+    eyeBtn.innerHTML = pinsHidden ? ANNO_ICON.eye : ANNO_ICON.eyeOff;
+    eyeBtn.title = pinsHidden ? '显示标记' : '隐藏标记';
+    eyeBtn.classList.toggle('is-off', pinsHidden);
+
+    bar.querySelector('.dp-send').textContent = count ? `发送 ${count}` : '发送';
+    bar.querySelector('.dp-send').disabled = count === 0;
+    bar.querySelector('.dp-copy').disabled = count === 0;
+    bar.querySelector('.dp-trash').disabled = count === 0;
+  }
+
+  // ---------- 评论气泡 ----------
+  function ensureBubble() {
+    ensureAnnoStyle();
+    let bubble = document.getElementById(BUBBLE_ID);
+    if (bubble) return bubble;
+    bubble = document.createElement('div');
+    bubble.id = BUBBLE_ID;
+    bubble.innerHTML =
+      '<input class="dp-input" type="text" maxlength="200" placeholder="添加评论…" ' +
+      'aria-label="批注内容" title="写完按 Enter 保存">' +
+      `<button type="button" class="dp-ok" title="保存（Enter）">${ANNO_ICON.check}</button>` +
+      `<button type="button" class="dp-remove" title="删除这条批注">${ANNO_ICON.trash}</button>`;
+
+    for (const type of ['click', 'pointerdown', 'pointerup', 'mousedown']) {
+      bubble.addEventListener(type, (event) => event.stopPropagation());
+    }
+
+    const input = bubble.querySelector('.dp-input');
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        closeBubble(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeBubble(true);
+      }
+    });
+    bubble.querySelector('.dp-ok').addEventListener('click', () => closeBubble(true));
+    bubble.querySelector('.dp-remove').addEventListener('click', () => {
+      const id = bubbleAnnoId;
+      closeBubble(false);
+      if (id) removeAnnotation(id);
+    });
+    document.documentElement.appendChild(bubble);
+    return bubble;
+  }
+
+  function openBubble(anno) {
+    const bubble = ensureBubble();
+    bubbleAnnoId = anno.id;
+    const input = bubble.querySelector('.dp-input');
+    input.value = anno.comment || '';
+    bubble.classList.add('is-open');
+    renderPins();
+    positionBubble();
+    try {
+      input.focus({ preventScroll: true });
+      input.select();
+    } catch (_) {
+      input.focus();
+    }
+  }
+
+  function closeBubble(save) {
+    const bubble = document.getElementById(BUBBLE_ID);
+    if (!bubble || !bubble.classList.contains('is-open')) return;
+    if (save) {
+      const anno = annots.find((item) => item.id === bubbleAnnoId);
+      if (anno) {
+        anno.comment = (bubble.querySelector('.dp-input').value || '').trim().slice(0, 200);
+      }
+    }
+    bubble.classList.remove('is-open');
+    bubbleAnnoId = 0;
+    renderPins();
+    renderAnnoBar();
+  }
+
+  function positionBubble() {
+    const bubble = document.getElementById(BUBBLE_ID);
+    if (!bubble || !bubble.classList.contains('is-open')) return;
+    const anno = annots.find((item) => item.id === bubbleAnnoId);
+    if (!anno) return;
+    const width = bubble.offsetWidth || 320;
+    const height = bubble.offsetHeight || 40;
+    const pinLeft = anno.x - scrollLeft();
+    const pinTop = anno.y - scrollTop();
+    const left = Math.min(Math.max(8, pinLeft - 24), Math.max(8, innerWidth - width - 8));
+    const above = pinTop - height - 14;
+    const top =
+      above > 8 ? above : Math.min(pinTop + 17, Math.max(8, innerHeight - height - 8));
+    bubble.style.left = `${Math.round(left)}px`;
+    bubble.style.top = `${Math.round(top)}px`;
+  }
+
+  // ---------- 批注数据 ----------
+  function addAnnotation(clientX, clientY) {
+    const el = targetAt(clientX, clientY);
+    const point = docPoint(clientX, clientY);
+    let offset = null;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        offset = {
+          x: Math.round(((clientX - rect.left) / rect.width) * 100),
+          y: Math.round(((clientY - rect.top) / rect.height) * 100),
+        };
+      }
+    }
+    annoSeq += 1;
+    const anno = {
+      id: annoSeq,
+      x: point.x,
+      y: point.y,
+      offset,
+      comment: '',
+      el,
+      target: el ? describe(el) : null,
+    };
+    annots.push(anno);
+    return anno;
+  }
+
+  function removeAnnotation(id) {
+    const index = annoIndexById(id);
+    if (index < 0) return;
+    annots.splice(index, 1);
+    if (bubbleAnnoId === id) bubbleAnnoId = 0;
+    renderPins();
+    renderAnnoBar();
+  }
+
+  function clearAnnotations() {
+    const bubble = document.getElementById(BUBBLE_ID);
+    if (bubble) bubble.classList.remove('is-open');
+    bubbleAnnoId = 0;
+    annots.length = 0;
+    renderPins();
+    renderAnnoBar();
+  }
+
+  function annotationTitle(anno) {
+    const target = anno.target;
+    if (!target) return '页面空白区域';
+    let title = target.tag;
+    if (target.id) title += `#${target.id}`;
+    if (target.classes.length) {
+      title += '.' + target.classes.slice(0, 2).join('.');
+    }
+    const name =
+      target.text ||
+      target.attrs.placeholder ||
+      target.attrs['aria-label'] ||
+      target.attrs.title ||
+      '';
+    if (name) title += `「${clip(name, 24)}」`;
+    if (target.component && target.component.name) title += ` · ${target.component.name}`;
+    return title;
+  }
+
+  /**
+   * 给每条批注生成一个 26×26 的小缩略图（data URL）：
+   * 元素是图片（或内部有图片）就裁一张真图，否则按计算样式画一个小色块示意图。
+   * 缩略图只在 DSH 的注释卡片里显示，尺寸很小，几 KB。
+   */
+  const THUMB_PX = 56;
+  let thumbCanvas = null;
+
+  function drawCover(ctx, source, sw, sh, size) {
+    const scale = Math.max(size / sw, size / sh);
+    const dw = sw * scale;
+    const dh = sh * scale;
+    ctx.drawImage(source, (size - dw) / 2, (size - dh) / 2, dw, dh);
+  }
+
+  function wireframeThumb(ctx, el, size) {
+    const styles = getComputedStyle(el);
+    const bg = styles.backgroundColor;
+    const opaque = bg && !/^rgba?\(\s*0,\s*0,\s*0,\s*0\)/.test(bg) && bg !== 'transparent';
+    ctx.fillStyle = opaque ? bg : '#eef2f7';
+    ctx.fillRect(0, 0, size, size);
+    // 顶部一条浅色带 + 两条文字行，看起来像一块界面
+    ctx.fillStyle = 'rgba(15, 23, 42, .10)';
+    ctx.fillRect(0, 0, size, Math.round(size * 0.10));
+    ctx.fillStyle = 'rgba(15, 23, 42, .16)';
+    ctx.fillRect(size * 0.14, size * 0.34, size * 0.62, Math.max(2, size * 0.07));
+    ctx.fillStyle = 'rgba(15, 23, 42, .10)';
+    ctx.fillRect(size * 0.14, size * 0.54, size * 0.44, Math.max(2, size * 0.07));
+    ctx.strokeStyle = 'rgba(15, 23, 42, .12)';
+    ctx.lineWidth = Math.max(1, size * 0.02);
+    ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, size - ctx.lineWidth, size - ctx.lineWidth);
+  }
+
+  function thumbFor(anno) {
+    if (anno.thumb !== undefined) return anno.thumb;
+    anno.thumb = null;
+    try {
+      const el = anno.el;
+      if (!el || !el.isConnected) return null;
+      const size = THUMB_PX;
+      if (!thumbCanvas) thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = size;
+      thumbCanvas.height = size;
+      const ctx = thumbCanvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.clearRect(0, 0, size, size);
+
+      // 1) 真图：元素本身是 <img>，或内部第一个已加载的 <img>
+      const img = el.tagName === 'IMG' ? el : el.querySelector && el.querySelector('img');
+      if (img && img.complete && img.naturalWidth > 0) {
+        try {
+          drawCover(ctx, img, img.naturalWidth, img.naturalHeight, size);
+          anno.thumb = thumbCanvas.toDataURL('image/png');
+          return anno.thumb;
+        } catch (_) {
+          // 跨域图片会污染画布，toDataURL 抛错：退回示意图
+          ctx.clearRect(0, 0, size, size);
+        }
+      }
+      wireframeThumb(ctx, el, size);
+      anno.thumb = thumbCanvas.toDataURL('image/png');
+    } catch (_) {
+      anno.thumb = null;
+    }
+    return anno.thumb;
+  }
+
+  /** 页面注释 → 桥接 payload（DSH 侧据此渲染「N 条注释」卡片）。 */
+  function annotationPayload(list) {
+    return {
+      kind: 'annotations',
+      page: { title: document.title, url: location.href, w: innerWidth, h: innerHeight },
+      annotations: list.map((anno, index) => ({
+        uid: `${ANNO_UID}-${anno.id}`,
+        no: index + 1,
+        tag: anno.target ? anno.target.tag : 'div',
+        label: annotationTitle(anno),
+        selector: anno.target ? anno.target.selector : null,
+        comment: anno.comment || '',
+        thumb: thumbFor(anno),
+        x: anno.x,
+        y: anno.y,
+        offset: anno.offset || null,
+      })),
+    };
+  }
+
+  /** 多条批注 → 一条给 AI 看的编号清单（与 client.js 的 formatAnnotationsBlock 同格式）。 */
+  function formatAnnotationsForAI(list) {
+    const items = list && list.length ? list : annots;
+    const first = items[0];
+    const page = first && first.target ? first.target.page : { title: document.title, url: location.href };
+    const lines = [];
+    lines.push(`【页面批注】共 ${items.length} 条`);
+    lines.push(`页面：${page.title || '(无标题)'} — ${page.url}`);
+    lines.push(
+      `视口：${innerWidth} × ${innerHeight}　页面坐标以文档左上角为原点（不随滚动变化）`,
+    );
+    lines.push('');
+    items.forEach((anno, index) => {
+      const facts = [`页面坐标 (${anno.x}, ${anno.y})`];
+      if (anno.offset && anno.target) {
+        facts.push(`元素内 (${anno.offset.x}%, ${anno.offset.y}%)`);
+      }
+      lines.push(`${index + 1}. ${annotationTitle(anno)}　${facts.join('　')}`);
+      lines.push(`   批注：${anno.comment ? clip(anno.comment, 200) : '（未填写具体描述）'}`);
+    });
+    lines.push('');
+    lines.push('修改需求：');
+    return lines.join('\n');
+  }
+
+  async function sendAnnotations() {
+    if (!annots.length) {
+      toast('还没有批注：点页面任意位置钉一个编号标记', 2800);
+      return;
+    }
+    const list = annots.slice();
+    closeBubble(true);
+    const text = formatAnnotationsForAI(list);
+    const ok = await push(text, annotationPayload(list));
+    if (ok) {
+      clearAnnotations();
+      stopAnnotating();
+      toast(`已发送 ${list.length} 条批注 → DSH 输入框上方的「${list.length} 条注释」`);
+      return;
+    }
+    const copied = await copyText(text);
+    toast(
+      copied
+        ? '没连上 DSH（插件未启动？），批注文本已复制到剪贴板，可直接粘贴'
+        : '没连上 DSH，且自动复制失败，请打开控制台查看',
+      4200,
+    );
+    if (!copied) console.log('[dsh-ui-picker]', text);
+  }
+
+  async function copyAnnotations() {
+    if (!annots.length) return;
+    closeBubble(true);
+    const ok = await copyText(formatAnnotationsForAI(annots.slice()));
+    toast(ok ? '批注文本已复制到剪贴板' : '复制失败，请打开控制台查看', 2400);
+  }
+
+  // ---------- 批注模式事件 ----------
+  function onAnnoMove(event) {
+    if (!annotating) return;
+    cancelAnimationFrame(rafId);
+    const x = event.clientX;
+    const y = event.clientY;
+    const target = event.target;
+    rafId = requestAnimationFrame(() => {
+      if (annoUiNode(target)) {
+        hidePaint();
+        return;
+      }
+      const el = targetAt(x, y);
+      if (!el) {
+        hidePaint();
+        return;
+      }
+      hoverEl = el;
+      paint(el, event);
+    });
+  }
+
+  function onAnnoClick(event) {
+    if (!annotating) return;
+    // 点在自己的 UI 上：交给 UI 自己处理，别顺手钉一条批注
+    if (annoUiNode(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const anno = addAnnotation(event.clientX, event.clientY);
+    renderPins();
+    renderAnnoBar();
+    hidePaint();
+    openBubble(anno);
+  }
+
+  function onAnnoKey(event) {
+    if (event.key === 'Escape') {
+      if (bubbleAnnoId) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeBubble(true);
+        return;
+      }
+      if (annotating) {
+        event.preventDefault();
+        event.stopPropagation();
+        stopAnnotating();
+        toast(annots.length ? `已退出批注，${annots.length} 条标记保留在页面上` : '已退出批注');
+      }
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      void sendAnnotations();
+    }
+  }
+
+  function startAnnotating() {
+    if (annotating) return;
+    if (picking) stopPicking();
+    hideModeMenu();
+    annotating = true;
+    ensureAnnoLayer();
+    ensureAnnoBar();
+    renderAnnoBar();
+    renderPins();
+    document.addEventListener('mousemove', onAnnoMove, true);
+    document.addEventListener('click', onAnnoClick, true);
+    document.addEventListener('keydown', onAnnoKey, true);
+    document.body.style.cursor = 'crosshair';
+    const fab = document.getElementById(FAB_ID);
+    if (fab) fab.style.display = 'none';
+    toast(
+      annots.length
+        ? `继续批注：页面上还有 ${annots.length} 条标记`
+        : '点页面任意位置钉一个标记，写完评论按 Enter；Esc 退出',
+      3400,
+    );
+  }
+
+  function stopAnnotating(options) {
+    const keep = !options || options.keep !== false;
+    if (!annotating) return;
+    annotating = false;
+    document.removeEventListener('mousemove', onAnnoMove, true);
+    document.removeEventListener('click', onAnnoClick, true);
+    document.removeEventListener('keydown', onAnnoKey, true);
+    document.body.style.cursor = '';
+    hoverEl = null;
+    hidePaint();
+    const bar = document.getElementById(ANNO_BAR_ID);
+    if (bar) bar.remove();
+    closeBubble(true);
+    const fab = document.getElementById(FAB_ID);
+    if (fab) fab.style.display = '';
+    if (!keep) clearAnnotations();
+    else renderPins();
   }
 
   // ---------- 悬浮按钮（克制的玻璃拟态小件，不抢页面视觉） ----------
@@ -822,6 +1797,78 @@
 @media (prefers-reduced-motion: reduce) {
   #__dsh_picker_fab__, #__dsh_picker_fab__ .dsh-picker-label { transition: none; }
 }
+
+/* 模式菜单：单击悬浮按钮先选「选取控件 / 页面批注」 */
+#__dsh_picker_menu__ {
+  position: fixed;
+  z-index: 2147483647;
+  width: 236px;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, .09);
+  background: rgba(255, 255, 255, .95);
+  -webkit-backdrop-filter: blur(16px) saturate(1.7);
+  backdrop-filter: blur(16px) saturate(1.7);
+  box-shadow: 0 18px 40px -16px rgba(15, 23, 42, .4);
+  color: #0f172a;
+  font: 500 12.5px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  animation: dsh-picker-menu-in .13s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes dsh-picker-menu-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+#__dsh_picker_menu__ .dp-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 9px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .12s ease;
+}
+#__dsh_picker_menu__ .dp-menu-item:hover { background: rgba(37, 99, 235, .09); }
+#__dsh_picker_menu__ .dp-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  font-size: 12.5px;
+}
+#__dsh_picker_menu__ .dp-menu-desc {
+  display: block;
+  margin-top: 2px;
+  color: rgba(15, 23, 42, .52);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+#__dsh_picker_menu__ .dp-menu-kbd {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 500 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgba(15, 23, 42, .38);
+  letter-spacing: .02em;
+}
+@media (prefers-color-scheme: dark) {
+  #__dsh_picker_menu__ {
+    border-color: rgba(255, 255, 255, .1);
+    background: rgba(17, 24, 39, .95);
+    color: #e5e7eb;
+    box-shadow: 0 18px 40px -14px rgba(0, 0, 0, .75);
+  }
+  #__dsh_picker_menu__ .dp-menu-item:hover { background: rgba(147, 197, 253, .13); }
+  #__dsh_picker_menu__ .dp-menu-desc { color: rgba(226, 232, 240, .55); }
+  #__dsh_picker_menu__ .dp-menu-kbd { color: rgba(226, 232, 240, .4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #__dsh_picker_menu__ { animation: none; }
+}
 `;
 
   function injectFabCss() {
@@ -830,6 +1877,86 @@
     style.id = '__dsh_picker_fab_css__';
     style.textContent = FAB_CSS;
     document.head.appendChild(style);
+  }
+
+  // ---------- 模式菜单（单击悬浮按钮展开） ----------
+  const MENU_ID = '__dsh_picker_menu__';
+
+  function hideModeMenu() {
+    const menu = document.getElementById(MENU_ID);
+    if (menu) menu.remove();
+    document.removeEventListener('click', onMenuOutside, true);
+    document.removeEventListener('keydown', onMenuKey, true);
+  }
+
+  function onMenuOutside(event) {
+    const menu = document.getElementById(MENU_ID);
+    if (menu && menu.contains(event.target)) return;
+    const fab = document.getElementById(FAB_ID);
+    if (fab && fab.contains(event.target)) return;
+    hideModeMenu();
+  }
+
+  function onMenuKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideModeMenu();
+    }
+  }
+
+  function toggleModeMenu() {
+    if (document.getElementById(MENU_ID)) {
+      hideModeMenu();
+      return;
+    }
+    const fab = document.getElementById(FAB_ID);
+    if (!fab) return;
+    injectFabCss();
+
+    const rect = fab.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = MENU_ID;
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML =
+      '<button type="button" class="dp-menu-item" data-mode="pick" role="menuitem">' +
+      '<span class="dp-menu-head">选取控件<span class="dp-menu-kbd">Ctrl ⇧ P</span></span>' +
+      '<span class="dp-menu-desc">点一下控件，把选择器和样式发给 AI</span>' +
+      '</button>' +
+      '<button type="button" class="dp-menu-item" data-mode="annotate" role="menuitem">' +
+      '<span class="dp-menu-head">页面批注<span class="dp-menu-kbd">Ctrl ⇧ A</span></span>' +
+      '<span class="dp-menu-desc">钉编号标记，逐条写要改的地方</span>' +
+      '</button>';
+
+    menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+    menu.addEventListener('click', (event) => {
+      const item = event.target.closest && event.target.closest('.dp-menu-item');
+      if (!item) return;
+      event.preventDefault();
+      event.stopPropagation();
+      hideModeMenu();
+      if (item.dataset.mode === 'annotate') startAnnotating();
+      else startPicking();
+    });
+
+    document.documentElement.appendChild(menu);
+
+    // 贴着按钮摆：默认在按钮上方，右对齐，越界时夹回视口
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const left = Math.min(Math.max(8, rect.right - width), Math.max(8, innerWidth - width - 8));
+    const top =
+      rect.top - height - 10 > 8
+        ? rect.top - height - 10
+        : Math.min(rect.bottom + 10, Math.max(8, innerHeight - height - 8));
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+
+    // 放到下一个事件循环再挂外部监听，避免被「打开菜单的这次点击」立刻关掉
+    setTimeout(() => {
+      document.addEventListener('click', onMenuOutside, true);
+      document.addEventListener('keydown', onMenuKey, true);
+    }, 0);
   }
 
   const FAB_ICON =
@@ -845,7 +1972,7 @@
     if (!fab) return;
     fab.classList.toggle('is-active', !!active);
     const label = fab.querySelector('.dsh-picker-label');
-    if (label) label.textContent = labelText || (active ? 'Esc 退出' : '选取控件');
+    if (label) label.textContent = labelText || (active ? 'Esc 退出' : '点选 / 批注');
     fab.setAttribute('aria-pressed', active ? 'true' : 'false');
     setTimeout(() => updateShift(fab), 240);
   }
@@ -928,9 +2055,9 @@
     const fab = document.createElement('button');
     fab.id = FAB_ID;
     fab.type = 'button';
-    fab.title = '选取页面控件发给 DSH（Ctrl+Shift+P）';
-    fab.setAttribute('aria-label', '选取页面控件发给 DSH');
-    fab.innerHTML = FAB_ICON + '<span class="dsh-picker-label">选取控件</span>';
+    fab.title = '选取控件或批注页面（Ctrl+Shift+P 拾取 / Ctrl+Shift+A 批注）';
+    fab.setAttribute('aria-label', '选取控件或批注页面');
+    fab.innerHTML = FAB_ICON + '<span class="dsh-picker-label">点选 / 批注</span>';
 
     // ---- 拖拽移动（Pointer Events：鼠标 / 触屏 / 手写笔通用）----
     let drag = null;
@@ -1017,8 +2144,12 @@
       event.preventDefault();
       event.stopPropagation();
       if (Date.now() < suppressClickUntil) return;
+      // 已经进了某个模式：再点按钮就是退出；否则先让用户选模式
       if (picking) stopPicking();
-      else startPicking();
+      else if (annotating) {
+        stopAnnotating();
+        toast(annots.length ? `已退出批注，${annots.length} 条标记保留在页面上` : '已退出批注');
+      } else toggleModeMenu();
     });
 
     // 还原上次拖到的位置（没有记录就保持默认右下角）
@@ -1085,16 +2216,26 @@
     // 窗口尺寸变化：把按钮夹回可视区，并重算贴边偏移
     window.addEventListener('resize', () => {
       const fab = document.getElementById(FAB_ID);
-      if (!fab) return;
-      if (fab.style.left) {
+      if (fab && fab.style.left) {
         placeFab(fab, parseFloat(fab.style.left) || 0, parseFloat(fab.style.top) || 0);
       }
-      updateShift(fab);
+      if (fab) updateShift(fab);
+      scheduleAnnoSync();
     });
+    // 滚动时把批注钉子、轮廓、评论气泡重新贴到内容上（捕获阶段，内部滚动容器也能收到）
+    window.addEventListener('scroll', scheduleAnnoSync, true);
     document.addEventListener('keydown', (event) => {
-      if (event.ctrlKey && event.shiftKey && (event.key === 'P' || event.code === 'KeyP')) {
+      if (!event.ctrlKey || !event.shiftKey) return;
+      const key = event.key ? event.key.toLowerCase() : '';
+      if (key === 'p' || event.code === 'KeyP') {
         event.preventDefault();
         picking ? stopPicking() : startPicking();
+      } else if (key === 'a' || event.code === 'KeyA') {
+        event.preventDefault();
+        if (annotating) {
+          stopAnnotating();
+          toast(annots.length ? `已退出批注，${annots.length} 条标记保留在页面上` : '已退出批注');
+        } else startAnnotating();
       }
     }, true);
     if (document.readyState === 'loading') {
@@ -1111,6 +2252,20 @@
   window.dshUiPicker = {
     start: startPicking,
     stop: stopPicking,
+    /** 进入批注模式（在页面上钉编号标记 + 写评论） */
+    annotate: startAnnotating,
+    stopAnnotate: () => stopAnnotating({ keep: true }),
+    clearAnnotations,
+    annotations: () =>
+      annots.map((anno, index) => ({
+        no: index + 1,
+        id: anno.id,
+        x: anno.x,
+        y: anno.y,
+        comment: anno.comment,
+        selector: anno.target ? anno.target.selector : null,
+      })),
+    formatAnnotations: () => formatAnnotationsForAI(annots.slice()),
     describe,
     format: formatForAI,
     push,

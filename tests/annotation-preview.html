@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>批注模式预览</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 40px 140px;
+    background: #f6f2e7; color: #1d2a22;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #ddd6c4; }
+  header .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .04em; }
+  header .brand small { display: block; font-size: 10px; letter-spacing: .22em; font-weight: 500; color: #6b7a63; }
+  header .badge { font-size: 10.5px; letter-spacing: .24em; color: #8a6a52; }
+  .kicker { margin: 24px 0 4px; font-size: 11.5px; letter-spacing: .28em; color: #8a6a52; }
+  h1 { margin: 0; font-size: 54px; letter-spacing: .04em; }
+  .lede { margin: 6px 0 20px; color: #5d6b58; font-size: 14.5px; line-height: 1.85; }
+  .hero { position: relative; height: 420px; border-radius: 16px; overflow: hidden; border: 1px solid #d9d3c0;
+          background: linear-gradient(180deg, #e2ebd9 0%, #d3e2d5 46%, #cfd8c4 58%, #eee3c9 100%); }
+  .hero .sun { position: absolute; right: 132px; top: 62px; width: 168px; height: 168px; border-radius: 50%; background: #ec8a5c; opacity: .82; }
+  .hero .water { position: absolute; left: 0; right: 0; top: 52%; height: 12%; background: rgba(168, 191, 172, .55); }
+  .hero .dune { position: absolute; left: 0; right: 0; bottom: 0; height: 34%; background: #ddcfae; }
+  .hero .bird { position: absolute; left: 46%; top: 44%; width: 26%; height: 34%; border-radius: 46% 54% 40% 60%; background: #fdfaf1; box-shadow: 0 14px 26px rgba(120, 120, 90, .18); }
+  .hero .wheel { position: absolute; bottom: 16%; width: 128px; height: 128px; border: 9px solid #25452f; border-radius: 50%; }
+  .hero .wheel.l { left: 25%; }
+  .hero .wheel.r { left: 50.5%; }
+  .card { margin-top: 14px; display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: 12px;
+          border: 1px solid #d9d3c0; background: #fdfbf5; }
+  .card .pin-ico { width: 18px; height: 18px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #d1774f; }
+  .card strong { font-size: 13px; letter-spacing: .06em; }
+  .card span { font-size: 11px; letter-spacing: .18em; color: #8a6a52; }
+  .foot { margin-top: 12px; display: flex; justify-content: space-between; font-size: 10.5px; letter-spacing: .22em; color: #8b917f; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span>慢骑俱乐部</span><small>THE SLOW RIDE CLUB</small></div>
+    <div class="badge">● FIELD NOTES / 01</div>
+  </header>
+
+  <p class="kicker">01 / A PELICAN'S DAY OFF</p>
+  <h1 id="page-title">鹈鹕骑行记</h1>
+  <p class="lede">沿着海岸慢慢骑。<br />今天的路程，由海风决定。</p>
+
+  <div class="hero" id="hero">
+    <div class="sun"></div>
+    <div class="water"></div>
+    <div class="dune"></div>
+    <div class="bird"></div>
+    <div class="wheel l"></div>
+    <div class="wheel r"></div>
+  </div>
+
+  <div class="card" id="place-card">
+    <div class="pin-ico"></div>
+    <div>
+      <strong>落日海岸</strong><br />
+      <span>SUNSET COAST</span>
+    </div>
+  </div>
+
+  <div class="foot"><span>THE SLOW RIDE CLUB</span><span>COASTAL SERIES · 01</span></div>
+
+<script src="http://127.0.0.1:17857/picker.js"></script>
+<script>
+  // 视觉预览：自动钉三条批注，并在最后一条上打开评论气泡（对照设计稿看样式）
+  (async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    await wait(420);
+    window.dshUiPicker.annotate();
+    await wait(60);
+
+    const clickAt = (x, y) => {
+      const el = document.elementFromPoint(x, y) || document.body;
+      const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
+      el.dispatchEvent(new MouseEvent('click', opts));
+    };
+    const comment = (text) => {
+      const input = document.querySelector('#__dsh_picker_anno_bubble__ .dp-input');
+      input.value = text;
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    };
+
+    // 用元素相对位置打点，换视口尺寸也能贴在同一块内容上
+    const at = (el, fx, fy) => {
+      const r = el.getBoundingClientRect();
+      clickAt(r.left + r.width * fx, r.top + r.height * fy);
+    };
+    const title = document.getElementById('page-title');
+    const hero = document.getElementById('hero');
+    const card = document.getElementById('place-card');
+
+    at(title, 0.06, 0.5);
+    await wait(40);
+    comment('主标题的字重再轻一点，字号缩到 46px');
+    await wait(40);
+
+    at(hero, 0.42, 0.58);
+    await wait(40);
+    comment('这张插画饱和度偏高，降一档；太阳再小一点');
+    await wait(40);
+
+    at(card, 0.22, 0.5);
+    await wait(40);
+    // 第三条不提交，留着气泡展示输入态
+    document.querySelector('#__dsh_picker_anno_bubble__ .dp-input').value = '';
+    document.title = '批注预览';
+  })();
+</script>
+</body>
+</html>
