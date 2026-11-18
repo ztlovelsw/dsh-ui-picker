@@ -19,7 +19,10 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "README.en.md"
+    "README.en.md",
+    "preview-annotation.png",
+    "preview-comments.png",
+    "preview-fab.png"
   ],
   "keywords": [
     "deepseek-harness",
